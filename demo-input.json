@@ -1,0 +1,40 @@
+Example demo input 1:
+
+{
+  "visitorId": "007",
+  "companyName": "BrightPath Lending",
+  "domain": "brightpathlending.com",
+  "pagesVisited": ["/pricing", "/ai-sales-agent", "/case-studies"],
+  "timeOnSite": "3m 42s",
+  "visitsThisWeek": 3,
+  "referralSource": "google",
+  "deviceType": "desktop",
+  "location": "Chicago, USA"
+}
+
+Example demo input 2:
+{
+  "visitorId": "008",
+  "companyName": "Rocket Mortgage",
+  "domain": "rocketmortgage.com",
+  "pagesVisited": ["/pricing", "/demo", "/contact", "/case-studies"],
+  "timeOnSite": "8m 30s",
+  "visitsThisWeek": 5,
+  "referralSource": "linkedin",
+  "deviceType": "desktop",
+  "location": "Detroit, USA"
+}
+
+
+Example demo input 3:
+{
+  "visitorId": "008",
+  "companyName": "Rocket Mortgage",
+  "domain": "rocketmortgage.com",
+  "pagesVisited": ["/pricing", "/demo", "/contact", "/case-studies"],
+  "timeOnSite": "8m 30s",
+  "visitsThisWeek": 5,
+  "referralSource": "linkedin",
+  "deviceType": "desktop",
+  "location": "Detroit, USA"
+}
