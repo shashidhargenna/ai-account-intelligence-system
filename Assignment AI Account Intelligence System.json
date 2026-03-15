@@ -1,0 +1,560 @@
+{
+  "name": "Assignment AI Account Intelligence System",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "account-intelligence",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "7144ff58-b281-4232-afb2-8ac181a53c49",
+      "name": "Webhook - Receive Input",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -1680,
+        128
+      ],
+      "webhookId": "ai-account-intel-001"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst requestId = 'ACC-' + Date.now();\nconst receivedAt = new Date().toISOString();\n\nconst inputType = body.visitorId ? 'visitor_signal' : 'company_input';\n\nconst visitorId = body.visitorId || '';\nconst ipAddress = body.ip || '';\nconst pagesVisited = Array.isArray(body.pagesVisited) ? body.pagesVisited : (body.pagesVisited ? [body.pagesVisited] : []);\nconst timeOnSite = body.timeOnSite || '0m 0s';\nconst visitsThisWeek = parseInt(body.visitsThisWeek) || 1;\nconst referralSource = body.referralSource || '';\nconst deviceType = body.deviceType || '';\nconst location = body.location || '';\n\nconst companyName = body.companyName || body.company || '';\nconst partialDomain = body.domain || '';\n\nconst intentPages = ['/pricing', '/demo', '/contact', '/checkout', '/trial', '/buy'];\nconst researchPages = ['/blog', '/resources', '/docs', '/documentation', '/learn'];\nconst productPages = ['/features', '/product', '/solutions', '/ai-sales-agent', '/case-studies'];\n\nlet pagePriorityScore = 0;\nfor (const page of pagesVisited) {\n  if (intentPages.some(p => page.toLowerCase().includes(p))) pagePriorityScore += 3;\n  else if (productPages.some(p => page.toLowerCase().includes(p))) pagePriorityScore += 2;\n  else if (researchPages.some(p => page.toLowerCase().includes(p))) pagePriorityScore += 1;\n}\n\nconst timeMatch = timeOnSite.match(/(\\d+)m\\s*(\\d+)s/);\nconst timeSeconds = timeMatch ? (parseInt(timeMatch[1]) * 60 + parseInt(timeMatch[2])) : 0;\n\nlet rawIntentScore = 0;\nrawIntentScore += Math.min(pagePriorityScore * 1.5, 4);\nrawIntentScore += Math.min(visitsThisWeek * 0.8, 3);\nrawIntentScore += timeSeconds > 180 ? 2 : timeSeconds > 60 ? 1 : 0;\nrawIntentScore = Math.min(Math.round(rawIntentScore * 10) / 10, 9);\n\nreturn [{\n  json: {\n    requestId,\n    receivedAt,\n    inputType,\n    visitorId,\n    ipAddress,\n    pagesVisited,\n    pagesVisitedStr: pagesVisited.join(', '),\n    timeOnSite,\n    visitsThisWeek,\n    referralSource,\n    deviceType,\n    visitorLocation: location,\n    companyName,\n    partialDomain,\n    rawIntentScore,\n    pagePriorityScore\n  }\n}];"
+      },
+      "id": "f72446b8-1c17-4cd5-aa7c-88e56b787f76",
+      "name": "Code - Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1440,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://ipapi.co/{{ $json.ipAddress }}/json/",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "4ff16310-4e91-484e-ae99-8b0348e6c8fd",
+      "name": "HTTP Request - IP Enrichment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -1200,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge IP enrichment data with normalized input\nconst ipData = $input.first().json;\nconst normalizedData = $('Code - Normalize Input').first().json;\n\n// Extract IP enrichment fields\nconst ipCity = ipData.city || '';\nconst ipRegion = ipData.region || '';\nconst ipCountry = ipData.country_name || '';\nconst ipOrg = ipData.org || '';\nconst ipTimezone = ipData.timezone || '';\nconst ipCurrency = ipData.currency || '';\n\n// Build enriched location from IP if visitor didn't provide it\nconst enrichedLocation = normalizedData.visitorLocation || \n  [ipCity, ipRegion, ipCountry].filter(Boolean).join(', ');\n\n// Try to infer company from IP org if no company name given\nconst inferredCompany = normalizedData.companyName || \n  (ipOrg ? ipOrg.replace(/^AS\\d+\\s+/i, '').trim() : '');\n\nreturn [{\n  json: {\n    ...normalizedData,\n    visitorLocation: enrichedLocation,\n    companyName: inferredCompany,\n    ipCity,\n    ipRegion,\n    ipCountry,\n    ipOrg,\n    ipTimezone,\n    ipEnriched: !!(ipCity || ipCountry)\n  }\n}];"
+      },
+      "id": "39dacf8f-9366-42cb-baae-e95e099295c3",
+      "name": "Code - Merge IP Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -960,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "prompt": {
+          "messages": [
+            {
+              "content": "=INPUT TYPE: {{ $json.inputType }}\nVISITOR ID: {{ $json.visitorId }}\nIP: {{ $json.ipAddress }}\nIP LOCATION: {{ $json.ipCity }}, {{ $json.ipRegion }}, {{ $json.ipCountry }}\nIP ORG: {{ $json.ipOrg }}\nPAGES: {{ $json.pagesVisitedStr }}\nTIME ON SITE: {{ $json.timeOnSite }}\nVISITS THIS WEEK: {{ $json.visitsThisWeek }}\nLOCATION: {{ $json.visitorLocation }}\nCOMPANY NAME: {{ $json.companyName }}\nRAW INTENT SCORE: {{ $json.rawIntentScore }}/10\n\nReturn ONLY this JSON, fully filled in with real inferred data:\n{\"companyName\":\"\",\"domain\":\"\",\"industry\":\"\",\"companySize\":\"\",\"headquarters\":\"\",\"foundingYear\":\"\",\"businessDescription\":\"\",\"likelyPersona\":\"\",\"personaConfidence\":0,\"intentScore\":0,\"intentStage\":\"MUST be one of these exact values only: Evaluation, Decision, Ready to Buy\",\"technologyStack\":{\"crm\":\"\",\"marketing\":\"\",\"website\":\"\",\"analytics\":\"\"},\"businessSignals\":[],\"keyDecisionMakers\":[{\"role\":\"\",\"name\":\"\"}],\"aiSummary\":\"\",\"recommendedActions\":[],\"confidenceScore\":0}"
+            },
+            {
+              "role": "system",
+              "content": "You are an AI sales intelligence analyst. Return only valid raw JSON with no markdown, no code blocks, no explanation. Just the JSON object."
+            }
+          ]
+        },
+        "simplifyOutput": false,
+        "options": {},
+        "requestOptions": {}
+      },
+      "id": "3ac62e04-63e6-475f-a76d-3dd91b4a416d",
+      "name": "OpenAI GPT-4o-mini - Enrich Account Intelligence",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        -720,
+        128
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "gGPqwytXxUwOUCod",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst normalizedData = $('Code - Merge IP Data').first().json;\n\nlet aiData = {};\ntry {\n  const rawText = item.message?.content || item.choices?.[0]?.message?.content || '';\n  const cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();\n  aiData = JSON.parse(cleaned);\n} catch (e) {\n  aiData = {\n    companyName: normalizedData.companyName || 'Unknown',\n    domain: normalizedData.partialDomain || '',\n    industry: 'Unknown',\n    companySize: 'Unknown',\n    headquarters: normalizedData.visitorLocation || 'Unknown',\n    foundingYear: 'Unknown',\n    businessDescription: 'Could not enrich - AI parsing error.',\n    likelyPersona: 'Unknown',\n    personaConfidence: 0,\n    intentScore: normalizedData.rawIntentScore,\n    intentStage: 'Research',\n    technologyStack: { crm: '', marketing: '', website: '', analytics: '' },\n    businessSignals: [],\n    keyDecisionMakers: [],\n    aiSummary: 'AI enrichment failed. Manual research required.',\n    recommendedActions: ['Manually research company', 'Verify visitor identity', 'Add to CRM for follow-up'],\n    confidenceScore: 10\n  };\n}\n\n// ============================================\n// 1. KEY SIGNALS OBSERVED\n// ============================================\nconst pages = normalizedData.pagesVisited || [];\nconst signals = [];\n\nif (pages.some(p => p.includes('/pricing'))) signals.push('Visited pricing page');\nif (pages.some(p => p.includes('/case-studies'))) signals.push('Viewed case studies');\nif (pages.some(p => p.includes('/ai-sales-agent'))) signals.push('Viewed AI sales agent page');\nif (pages.some(p => p.includes('/demo'))) signals.push('Requested demo page');\nif (pages.some(p => p.includes('/features') || p.includes('/product'))) signals.push('Browsed product features');\nif (pages.some(p => p.includes('/blog') || p.includes('/resources'))) signals.push('Read educational content');\nif (normalizedData.visitsThisWeek > 1) signals.push('Repeat visits (' + normalizedData.visitsThisWeek + 'x this week)');\nif (normalizedData.timeOnSite && normalizedData.timeOnSite !== '0m 0s') signals.push('High dwell time: ' + normalizedData.timeOnSite);\nif (normalizedData.referralSource) signals.push('Referred from: ' + normalizedData.referralSource);\nif (normalizedData.ipEnriched) signals.push('IP location verified: ' + normalizedData.ipCity + ', ' + normalizedData.ipCountry);\n\nconst keySignalsObserved = signals.join(' | ');\n\n// ============================================\n// 2. DATA CONFIDENCE SCORE\n// ============================================\nconst aiConfidence = parseFloat(aiData.confidenceScore) || 0;\n\n// Count how many key fields are actually filled\nconst fieldsToCheck = [\n  aiData.companyName, aiData.domain, aiData.industry,\n  aiData.companySize, aiData.headquarters, aiData.likelyPersona,\n  aiData.businessDescription, aiData.aiSummary\n];\nconst filledFields = fieldsToCheck.filter(f => f && f.trim() && f !== 'Unknown' && f !== '').length;\nconst dataCompletenessScore = Math.round((filledFields / fieldsToCheck.length) * 40); // max 40 pts\n\n// IP enrichment bonus\nconst ipBonus = normalizedData.ipEnriched ? 15 : 0;\n\n// Page signals bonus\nconst signalBonus = Math.min(signals.length * 3, 15); // max 15 pts\n\n// AI raw confidence (scaled to 30)\nconst aiBonus = Math.round((aiConfidence / 100) * 30);\n\n// Final confidence score out of 100\nconst finalConfidenceScore = Math.min(dataCompletenessScore + ipBonus + signalBonus + aiBonus, 100);\n\n// ============================================\n// 3. PRIORITY TIER\n// ============================================\nconst intentScore = parseFloat(aiData.intentScore) || normalizedData.rawIntentScore;\nlet priorityTier = '';\nif (intentScore >= 8) priorityTier = 'Priority 1 - Hot Lead';\nelse if (intentScore >= 6) priorityTier = 'Priority 2 - Warm Lead';\nelse if (intentScore >= 4) priorityTier = 'Priority 3 - Nurture';\nelse priorityTier = 'Priority 4 - Cold';\n\n// ============================================\n// BUILD OUTPUT FIELDS\n// ============================================\nconst tech = aiData.technologyStack || {};\nconst techSummary = Object.entries(tech)\n  .filter(([_, v]) => v && v.trim())\n  .map(([k, v]) => k + ': ' + v)\n  .join(' | ');\n\nconst dmSummary = (aiData.keyDecisionMakers || [])\n  .map(dm => dm.role + (dm.name && dm.name !== 'Unknown' ? ': ' + dm.name : ''))\n  .join(', ');\n\nconst actionsStr = (aiData.recommendedActions || []).join(' | ');\nconst signalsStr = (aiData.businessSignals || []).join(', ');\n\nreturn [{\n  json: {\n    requestId: normalizedData.requestId,\n    receivedAt: normalizedData.receivedAt,\n    inputType: normalizedData.inputType,\n    visitorId: normalizedData.visitorId,\n    ipAddress: normalizedData.ipAddress,\n    pagesVisited: normalizedData.pagesVisitedStr,\n    timeOnSite: normalizedData.timeOnSite,\n    visitsThisWeek: normalizedData.visitsThisWeek,\n    // Company Profile\n    companyName: aiData.companyName || normalizedData.companyName,\n    domain: aiData.domain || normalizedData.partialDomain,\n    industry: aiData.industry,\n    companySize: aiData.companySize,\n    headquarters: aiData.headquarters,\n    foundingYear: aiData.foundingYear,\n    businessDescription: aiData.businessDescription,\n    // Persona & Intent\n    likelyPersona: aiData.likelyPersona,\n    personaConfidence: aiData.personaConfidence + '%',\n    intentScore: intentScore + ' / 10',\n    intentStage: aiData.intentStage,\n    priorityTier,\n    // Enrichment\n    technologyStack: techSummary,\n    businessSignals: signalsStr,\n    keyDecisionMakers: dmSummary,\n    // NEW: Key Signals Observed\n    keySignalsObserved,\n    // NEW: Data Confidence Score\n    confidenceScore: finalConfidenceScore + '%',\n    confidenceBreakdown: 'Data: ' + dataCompletenessScore + ' | IP: ' + ipBonus + ' | Signals: ' + signalBonus + ' | AI: ' + aiBonus,\n    // Summary & Actions\n    aiSummary: aiData.aiSummary,\n    recommendedActions: actionsStr,\n    rawActions: aiData.recommendedActions || [],\n    rawDecisionMakers: aiData.keyDecisionMakers || []\n  }\n}];"
+      },
+      "id": "b7f1aec2-4544-4028-ab3f-73c7d2c06967",
+      "name": "Code - Parse & Enrich Intelligence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intentStage }}",
+                    "rightValue": "Ready to Buy",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "dbf50015-1046-471d-bb54-3b38b10ce71d"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Hot"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intentStage }}",
+                    "rightValue": "Evaluation",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "4fd7aef4-734e-415d-bb68-da71f70638d5"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Warm"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intentStage }}",
+                    "rightValue": "Decision",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "bb6afeab-3100-4a3c-860f-bd9417d916d9"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Decision"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "0a43a64d-750a-45b0-82d2-063ea9632a92",
+      "name": "Switch - Route by Intent Stage",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -288,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1v2OPJXMHsBhHeHtBxTe4mx8CybC-M_UTfMi0aXO5Lhg",
+          "mode": "list",
+          "cachedResultName": "AI Account intelligence Crm ",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1v2OPJXMHsBhHeHtBxTe4mx8CybC-M_UTfMi0aXO5Lhg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1v2OPJXMHsBhHeHtBxTe4mx8CybC-M_UTfMi0aXO5Lhg/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Company Name": "={{ $json.companyName }}",
+            "Website / Domain": "={{ $json.domain }}",
+            "Industry": "={{ $json.industry }}",
+            "Company Size": "={{ $json.companySize }}",
+            "Headquarters": "={{ $json.headquarters }}",
+            "Likely Persona": "={{ $json.likelyPersona }}",
+            "Intent Score": "={{ $json.intentScore }}",
+            "Intent Stage": "={{ $json.intentStage }}",
+            "AI Summary": "={{ $json.aiSummary }}",
+            "Recommended Sales Action": "={{ $json.recommendedActions }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Company Name",
+              "displayName": "Company Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Website / Domain",
+              "displayName": "Website / Domain",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Industry",
+              "displayName": "Industry",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Company Size",
+              "displayName": "Company Size",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Headquarters",
+              "displayName": "Headquarters",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Likely Persona",
+              "displayName": "Likely Persona",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Intent Score",
+              "displayName": "Intent Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Intent Stage",
+              "displayName": "Intent Stage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI Summary",
+              "displayName": "AI Summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Recommended Sales Action",
+              "displayName": "Recommended Sales Action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c4b66ac1-c9a2-44b0-a251-57cd23496620",
+      "name": "Google Sheets - Log Account Intelligence",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "99aEse7jrmyJZ5Sp",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0ALQ2YKENQ",
+          "mode": "list",
+          "cachedResultName": "variation"
+        },
+        "text": "={{ '🧠 *New Account Intelligence Report!*\\n\\n📌 *' + $json.priorityTier + '*\\n\\n🏢 *Company:* ' + $json.companyName + '\\n🌐 *Domain:* ' + $json.domain + '\\n🏭 *Industry:* ' + $json.industry + '\\n📏 *Size:* ' + $json.companySize + '\\n📍 *HQ:* ' + $json.headquarters + '\\n\\n👤 *Likely Persona:* ' + $json.likelyPersona + ' (' + $json.personaConfidence + ' confidence)\\n🎯 *Intent Score:* ' + $json.intentScore + ' — Stage: ' + $json.intentStage + '\\n\\n🌐 *Visitor ID:* ' + $json.visitorId + ' | IP: ' + $json.ipAddress + '\\n📄 *Pages Visited:* ' + $json.pagesVisited + '\\n⏱ *Time on Site:* ' + $json.timeOnSite + ' | Visits This Week: ' + $json.visitsThisWeek + '\\n\\n🔍 *Key Signals Observed:*\\n' + $json.keySignalsObserved + '\\n\\n💡 *AI Summary:*\\n' + $json.aiSummary + '\\n\\n✅ *Recommended Sales Actions:*\\n' + $json.rawActions.map(function(a, i) { return (i+1) + '. ' + a; }).join('\\n') + '\\n\\n🔧 *Tech Stack:* ' + ($json.technologyStack || 'Unknown') + '\\n📊 *Business Signals:* ' + ($json.businessSignals || 'None detected') + '\\n👔 *Leadership:* ' + ($json.keyDecisionMakers || 'Unknown') + '\\n📈 *Data Confidence Score:* ' + $json.confidenceScore }}",
+        "otherOptions": {}
+      },
+      "id": "ba532c44-e311-406c-913f-77be7be72cef",
+      "name": "Slack - Alert Sales Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        0,
+        128
+      ],
+      "webhookId": "efa96de5-d5ce-452b-8702-d509becc4bb2",
+      "credentials": {
+        "slackApi": {
+          "id": "GCuG9UkN5YlYEjIq",
+          "name": "Slack account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "shashidhar8723@gmail.com",
+        "subject": "={{ '🔴 High-Intent Account: ' + $json.companyName + ' — Intent Score ' + $json.intentScore }}",
+        "message": "={{ '<h2>🧠 AI Account Intelligence Report</h2><p><strong>Priority:</strong> ' + $json.priorityTier + '</p><hr><h3>Company Profile</h3><p><strong>Company:</strong> ' + $json.companyName + '<br><strong>Website / Domain:</strong> ' + $json.domain + '<br><strong>Industry:</strong> ' + $json.industry + '<br><strong>Company Size:</strong> ' + $json.companySize + '<br><strong>Headquarters:</strong> ' + $json.headquarters + '</p><hr><h3>Visitor Signals</h3><p><strong>Visitor ID:</strong> ' + $json.visitorId + '<br><strong>IP:</strong> ' + $json.ipAddress + '<br><strong>Pages Visited:</strong> ' + $json.pagesVisited + '<br><strong>Time on Site:</strong> ' + $json.timeOnSite + '<br><strong>Visits This Week:</strong> ' + $json.visitsThisWeek + '</p><hr><h3>Key Signals Observed</h3><p>' + $json.keySignalsObserved + '</p><hr><h3>Intent & Persona</h3><p><strong>Likely Persona:</strong> ' + $json.likelyPersona + ' (' + $json.personaConfidence + ' confidence)<br><strong>Intent Score:</strong> ' + $json.intentScore + '<br><strong>Intent Stage:</strong> ' + $json.intentStage + '</p><hr><h3>AI Summary</h3><p>' + $json.aiSummary + '</p><hr><h3>Recommended Sales Actions</h3><ol>' + $json.rawActions.map(function(a) { return '<li>' + a + '</li>'; }).join('') + '</ol><hr><h3>Additional Enrichment</h3><p><strong>Technology Stack:</strong> ' + $json.technologyStack + '<br><strong>Business Signals:</strong> ' + $json.businessSignals + '<br><strong>Leadership:</strong> ' + $json.keyDecisionMakers + '<br><strong>Data Confidence Score:</strong> ' + $json.confidenceScore + '</p>' }}",
+        "options": {}
+      },
+      "id": "6cffa4b6-522a-42bf-8ddf-990f343cfdec",
+      "name": "Gmail - Email Sales Brief",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        0,
+        240
+      ],
+      "webhookId": "06146d48-7e75-45aa-90a3-26a454461e51",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "unM2LS8hn7JfElQP",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, requestId: $json.requestId, companyName: $json.companyName, domain: $json.domain, industry: $json.industry, companySize: $json.companySize, headquarters: $json.headquarters, likelyPersona: $json.likelyPersona, intentScore: $json.intentScore, intentStage: $json.intentStage, aiSummary: $json.aiSummary, recommendedSalesAction: $json.recommendedActions, technologyStack: $json.technologyStack, leadership: $json.keyDecisionMakers, keySignalsObserved: $json.keySignalsObserved, businessSignals: $json.businessSignals, dataConfidenceScore: $json.confidenceScore }) }}",
+        "options": {}
+      },
+      "id": "a4121544-64ba-46e8-94fe-fc7e1dac5114",
+      "name": "Webhook Response - Return Intelligence",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        128
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Receive Input": {
+      "main": [
+        [
+          {
+            "node": "Code - Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request - IP Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request - IP Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Code - Merge IP Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Merge IP Data": {
+      "main": [
+        [
+          {
+            "node": "OpenAI GPT-4o-mini - Enrich Account Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI GPT-4o-mini - Enrich Account Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse & Enrich Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse & Enrich Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Switch - Route by Intent Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch - Route by Intent Stage": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets - Log Account Intelligence",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gmail - Email Sales Brief",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack - Alert Sales Team",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Sheets - Log Account Intelligence",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack - Alert Sales Team",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Sheets - Log Account Intelligence",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gmail - Email Sales Brief",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack - Alert Sales Team",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Sheets - Log Account Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets - Log Account Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response - Return Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "d9026a06-739f-4d2b-8c1d-0f04a526b14d",
+  "meta": {
+    "instanceId": "0b046c792f3c8bdd4a46540f0887cf88b2ce2d6a1a9b464383d78f7ca3bd5bf1"
+  },
+  "id": "mBUFNjgxGvcBMMlHR_jM6",
+  "tags": []
+}
